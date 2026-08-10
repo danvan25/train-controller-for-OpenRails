@@ -184,6 +184,77 @@ hal::I2cResult Sh1106::draw_test_pattern()
     return hal::I2cResult::Ok;
 }
 
+hal::I2cResult Sh1106::present(
+    const std::uint8_t* framebuffer,
+    std::size_t length
+)
+{
+    constexpr std::uint8_t COLUMN_OFFSET = 2;
+    constexpr std::size_t FRAMEBUFFER_SIZE =
+        WIDTH * PAGE_COUNT;
+
+    if (framebuffer == nullptr ||
+        length != FRAMEBUFFER_SIZE)
+    {
+        return hal::I2cResult::InvalidArgument;
+    }
+
+    std::array<std::uint8_t, WIDTH + 1>
+        transmission {};
+
+    transmission[0] = DATA_CONTROL_BYTE;
+
+    for (std::uint8_t page = 0;
+         page < PAGE_COUNT;
+         ++page)
+    {
+        const std::uint8_t page_commands[] {
+            static_cast<std::uint8_t>(0xB0 | page),
+            static_cast<std::uint8_t>(
+                COLUMN_OFFSET & 0x0F
+            ),
+            static_cast<std::uint8_t>(
+                0x10 | (COLUMN_OFFSET >> 4)
+            )
+        };
+
+        hal::I2cResult result =
+            send_commands(
+                page_commands,
+                sizeof(page_commands)
+            );
+
+        if (result != hal::I2cResult::Ok)
+        {
+            return result;
+        }
+
+        const std::size_t page_offset =
+            static_cast<std::size_t>(page) * WIDTH;
+
+        for (std::size_t column = 0;
+             column < WIDTH;
+             ++column)
+        {
+            transmission[column + 1] =
+                framebuffer[page_offset + column];
+        }
+
+        result = i2c_.write(
+            address_,
+            transmission.data(),
+            transmission.size()
+        );
+
+        if (result != hal::I2cResult::Ok)
+        {
+            return result;
+        }
+    }
+
+    return hal::I2cResult::Ok;
+}
+
 hal::I2cResult Sh1106::send_commands(
     const std::uint8_t* commands,
     std::size_t length

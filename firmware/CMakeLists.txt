@@ -40,6 +40,8 @@ add_executable(firmware
     src/hal/i2c_master.cpp
     src/hal/i2c_master.cpp
     src/drivers/sh1106.cpp
+    src/graphics/framebuffer.cpp
+    src/graphics/speed_gauge.cpp
 )
 
 pico_set_program_name(firmware "firmware")

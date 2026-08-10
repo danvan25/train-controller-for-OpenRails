@@ -23,6 +23,11 @@ public:
     [[nodiscard]] hal::I2cResult initialize();
     [[nodiscard]] hal::I2cResult clear();
     [[nodiscard]] hal::I2cResult draw_test_pattern();
+    
+    [[nodiscard]] hal::I2cResult present(
+    const std::uint8_t* framebuffer,
+    std::size_t length
+);
 
 private:
     static constexpr std::size_t CONTROLLER_WIDTH = 132;
