@@ -75,23 +75,48 @@ int main()
         I2cController::I2c0,
         4,
         5,
-        100'000,
+        400'000,
         150'000'000
     };
 
+    const I2cConfig i2c_1_config {
+    I2cController::I2c1,
+    6,
+    7,
+    400'000,
+    150'000'000
+};
+
     I2cMaster i2c(i2c_config);
+I2cMaster i2c_1(i2c_1_config);
 
-    if (i2c.initialize() != I2cResult::Ok)
-    {
-        blink_error(100);
-    }
+if (i2c.initialize() != I2cResult::Ok)
+{
+    blink_error(100);
+}
 
-    Sh1106 display(i2c);
+if (i2c_1.initialize() != I2cResult::Ok)
+{
+    blink_error(200);
+}
 
-    if (display.initialize() != I2cResult::Ok)
-    {
-        blink_error(250);
-    }
+Sh1106 display(i2c, 0x3C);
+Sh1106 second_display(i2c_1, 0x3C);
+
+if (display.initialize() != I2cResult::Ok)
+{
+    blink_error(250);
+}
+
+if (second_display.initialize() != I2cResult::Ok)
+{
+    blink_error(400);
+}
+
+if (second_display.draw_test_pattern() != I2cResult::Ok)
+{
+    blink_error(600);
+}
 
     Framebuffer framebuffer;
 
