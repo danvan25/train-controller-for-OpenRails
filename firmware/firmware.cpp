@@ -1,4 +1,3 @@
-#include <cstddef>
 #include <cstdint>
 
 #include "pico/stdlib.h"
@@ -9,6 +8,7 @@
 #include "hardware/structs/pads_bank0.h"
 #include "hardware/structs/sio.h"
 
+#include "drivers/sh1106.hpp"
 #include "hal/i2c_master.hpp"
 
 namespace
@@ -16,8 +16,6 @@ namespace
 
 constexpr std::uint32_t LED_PIN = 25;
 constexpr std::uint32_t LED_MASK = 1u << LED_PIN;
-
-constexpr std::uint8_t OLED_ADDRESS = 0x3C;
 
 void initialize_status_led()
 {
@@ -56,6 +54,7 @@ void set_status_led(bool enabled)
 
 int main()
 {
+    using train_controller::drivers::Sh1106;
     using train_controller::hal::I2cConfig;
     using train_controller::hal::I2cController;
     using train_controller::hal::I2cMaster;
@@ -63,7 +62,7 @@ int main()
 
     initialize_status_led();
 
-    const I2cConfig config {
+    const I2cConfig i2c_config {
         I2cController::I2c0,
         4,
         5,
@@ -71,47 +70,38 @@ int main()
         150'000'000
     };
 
-    I2cMaster i2c(config);
+    I2cMaster i2c(i2c_config);
 
-    const I2cResult initialization_result =
+    const I2cResult i2c_result =
         i2c.initialize();
 
-    if (initialization_result != I2cResult::Ok)
+    if (i2c_result != I2cResult::Ok)
     {
-        // Fast blinking: local I2C configuration error.
+        // Very fast blinking: I2C configuration failed.
         blink_error(100);
     }
 
-    // SH1106 control byte:
-    // 0x00 means that the following byte is a command.
-    //
-    // SH1106 command:
-    // 0xAE means Display OFF.
-    const std::uint8_t display_off_command[] {
-        0x00,
-        0xAE
-    };
+    Sh1106 display(i2c);
 
-    const I2cResult write_result =
-        i2c.write(
-            OLED_ADDRESS,
-            display_off_command,
-            sizeof(display_off_command)
-        );
+    const I2cResult display_result =
+        display.initialize();
 
-    if (write_result == I2cResult::AddressNotAcknowledged)
+    if (display_result != I2cResult::Ok)
     {
-        // Slow blinking: no device responded at address 0x3C.
-        blink_error(500);
-    }
-
-    if (write_result != I2cResult::Ok)
-    {
-        // Medium blinking: another I2C transmission error.
+        // Medium blinking: SH1106 initialization failed.
         blink_error(250);
     }
 
-    // Solid LED: the OLED acknowledged the address and command.
+    const I2cResult pattern_result =
+        display.draw_test_pattern();
+
+    if (pattern_result != I2cResult::Ok)
+    {
+        // Slow blinking: display-data transmission failed.
+        blink_error(500);
+    }
+
+    // Solid LED means initialization and drawing both succeeded.
     set_status_led(true);
 
     while (true)

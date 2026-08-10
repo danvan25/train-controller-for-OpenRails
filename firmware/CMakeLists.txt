@@ -38,6 +38,8 @@ pico_sdk_init()
 add_executable(firmware
     firmware.cpp
     src/hal/i2c_master.cpp
+    src/hal/i2c_master.cpp
+    src/drivers/sh1106.cpp
 )
 
 pico_set_program_name(firmware "firmware")
