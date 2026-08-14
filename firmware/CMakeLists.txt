@@ -42,6 +42,7 @@ add_executable(firmware
     src/drivers/sh1106.cpp
     src/graphics/framebuffer.cpp
     src/graphics/speed_gauge.cpp
+    src/graphics/evm_display.cpp
 )
 
 pico_set_program_name(firmware "firmware")

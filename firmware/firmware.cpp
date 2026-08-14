@@ -1,17 +1,16 @@
 #include <cstdint>
-
+#include <array>
 #include "pico/stdlib.h"
-
 #include "hardware/gpio.h"
 #include "hardware/regs/pads_bank0.h"
 #include "hardware/structs/io_bank0.h"
 #include "hardware/structs/pads_bank0.h"
 #include "hardware/structs/sio.h"
-
 #include "drivers/sh1106.hpp"
 #include "graphics/framebuffer.hpp"
 #include "graphics/speed_gauge.hpp"
 #include "hal/i2c_master.hpp"
+#include "graphics/evm_display.hpp"
 
 namespace
 {
@@ -61,9 +60,13 @@ void set_status_led(bool enabled)
 int main()
 {
     using train_controller::drivers::Sh1106;
+
+    using train_controller::graphics::EvmDisplay;
+    using train_controller::graphics::EvmSignal;
     using train_controller::graphics::Framebuffer;
     using train_controller::graphics::SpeedGauge;
     using train_controller::graphics::SpeedGaugeConfig;
+
     using train_controller::hal::I2cConfig;
     using train_controller::hal::I2cController;
     using train_controller::hal::I2cMaster;
@@ -113,32 +116,97 @@ if (second_display.initialize() != I2cResult::Ok)
     blink_error(400);
 }
 
-if (second_display.draw_test_pattern() != I2cResult::Ok)
+/*if (second_display.draw_test_pattern() != I2cResult::Ok)
+{
+    blink_error(600);
+}*/
+
+    Framebuffer speed_framebuffer;
+Framebuffer evm_framebuffer;
+
+const SpeedGaugeConfig gauge_config {
+    MAXIMUM_SPEED,
+    20,
+    10
+};
+
+const SpeedGauge speed_gauge(gauge_config);
+
+const train_controller::graphics::EvmDisplay evm_display;
+
+constexpr std::array<
+    train_controller::graphics::EvmSignal,
+    8
+> EVM_SIGNALS {
+    train_controller::graphics::EvmSignal::MaximumSpeed,
+    train_controller::graphics::EvmSignal::Speed120,
+    train_controller::graphics::EvmSignal::Speed80,
+    train_controller::graphics::EvmSignal::Speed40,
+    train_controller::graphics::EvmSignal::PrepareToStop,
+    train_controller::graphics::EvmSignal::PassedStopSignal,
+    train_controller::graphics::EvmSignal::NoSignal,
+    train_controller::graphics::EvmSignal::Shunting
+};
+
+constexpr std::uint32_t EVM_HOLD_FRAMES = 20;
+
+std::size_t evm_signal_index = 0;
+std::uint32_t evm_frame_counter = 0;
+
+const auto render_evm_signal =
+    [&]() -> I2cResult
+    {
+        evm_display.draw(
+            evm_framebuffer,
+            EVM_SIGNALS[evm_signal_index]
+        );
+
+        return second_display.present(
+            evm_framebuffer.data(),
+            evm_framebuffer.size()
+        );
+    };
+
+if (render_evm_signal() != I2cResult::Ok)
 {
     blink_error(600);
 }
 
-    Framebuffer framebuffer;
+const auto render_frame =
+    [&](std::uint16_t speed) -> I2cResult
+    {
+        speed_framebuffer.clear();
 
-    const SpeedGaugeConfig gauge_config {
-        MAXIMUM_SPEED,
-        20,
-        10
-    };
+        speed_gauge.draw(
+            speed_framebuffer,
+            speed
+        );
 
-    const SpeedGauge speed_gauge(gauge_config);
+        I2cResult result = display.present(
+            speed_framebuffer.data(),
+            speed_framebuffer.size()
+        );
 
-    const auto render_frame =
-        [&](std::uint16_t speed) -> I2cResult
+        if (result != I2cResult::Ok)
         {
-            framebuffer.clear();
-            speed_gauge.draw(framebuffer, speed);
+            return result;
+        }
 
-            return display.present(
-                framebuffer.data(),
-                framebuffer.size()
-            );
-        };
+        ++evm_frame_counter;
+
+        if (evm_frame_counter >= EVM_HOLD_FRAMES)
+        {
+            evm_frame_counter = 0;
+
+            evm_signal_index =
+                (evm_signal_index + 1) %
+                EVM_SIGNALS.size();
+
+            result = render_evm_signal();
+        }
+
+        return result;
+    };
 
     // Solid LED indicates successful initialization.
     set_status_led(true);
