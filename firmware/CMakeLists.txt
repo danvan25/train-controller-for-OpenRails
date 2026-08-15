@@ -35,22 +35,36 @@ pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(firmware firmware.cpp )
+add_executable(firmware
+    firmware.cpp
+    src/hal/i2c_master.cpp
+    src/drivers/sh1106.cpp
+    src/graphics/framebuffer.cpp
+    src/graphics/speed_gauge.cpp
+    src/graphics/evm_display.cpp
+    src/inputs/linear_potentiometer.cpp
+    src/tests/potentiometer_test.cpp
+    src/inputs/linear_potentiometer.cpp
+    src/tests/potentiometer_test.cpp
+)
 
 pico_set_program_name(firmware "firmware")
 pico_set_program_version(firmware "0.1")
 
 # Modify the below lines to enable/disable output over UART/USB
 pico_enable_stdio_uart(firmware 0)
-pico_enable_stdio_usb(firmware 0)
+pico_enable_stdio_usb(firmware 1)
 
 # Add the standard library to the build
 target_link_libraries(firmware
-        pico_stdlib)
+    pico_stdlib
+    hardware_adc
+)
 
 # Add the standard include files to the build
 target_include_directories(firmware PRIVATE
-        ${CMAKE_CURRENT_LIST_DIR}
+    ${CMAKE_CURRENT_LIST_DIR}
+    ${CMAKE_CURRENT_LIST_DIR}/include
 )
 
 pico_add_extra_outputs(firmware)
