@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <array>
+#include <cstdio>
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include "hardware/regs/pads_bank0.h"
@@ -11,6 +12,8 @@
 #include "graphics/speed_gauge.hpp"
 #include "hal/i2c_master.hpp"
 #include "graphics/evm_display.hpp"
+#include "inputs/linear_potentiometer.hpp"
+#include "tests/potentiometer_test.hpp"
 
 namespace
 {
@@ -19,8 +22,10 @@ constexpr std::uint32_t LED_PIN = 25;
 constexpr std::uint32_t LED_MASK = 1u << LED_PIN;
 
 constexpr std::uint16_t MAXIMUM_SPEED = 160;
-constexpr std::uint16_t ANIMATION_STEP = 2;
-constexpr std::uint32_t FRAME_DELAY_MS = 35;
+
+constexpr std::uint32_t POTENTIOMETER_PRINT_INTERVAL_MS = 200;
+constexpr std::uint32_t EVM_SIGNAL_INTERVAL_MS = 700;
+constexpr std::uint32_t MAIN_LOOP_DELAY_MS = 5;
 
 void initialize_status_led()
 {
@@ -59,6 +64,11 @@ void set_status_led(bool enabled)
 
 int main()
 {
+    stdio_init_all();
+
+    train_controller::inputs::LinearPotentiometer throttle(26, 0);
+    throttle.initialize();
+
     using train_controller::drivers::Sh1106;
 
     using train_controller::graphics::EvmDisplay;
@@ -148,10 +158,7 @@ constexpr std::array<
     train_controller::graphics::EvmSignal::Shunting
 };
 
-constexpr std::uint32_t EVM_HOLD_FRAMES = 20;
-
 std::size_t evm_signal_index = 0;
-std::uint32_t evm_frame_counter = 0;
 
 const auto render_evm_signal =
     [&]() -> I2cResult
@@ -172,7 +179,7 @@ if (render_evm_signal() != I2cResult::Ok)
     blink_error(600);
 }
 
-const auto render_frame =
+const auto render_speed =
     [&](std::uint16_t speed) -> I2cResult
     {
         speed_framebuffer.clear();
@@ -182,64 +189,167 @@ const auto render_frame =
             speed
         );
 
-        I2cResult result = display.present(
+        return display.present(
             speed_framebuffer.data(),
             speed_framebuffer.size()
         );
-
-        if (result != I2cResult::Ok)
-        {
-            return result;
-        }
-
-        ++evm_frame_counter;
-
-        if (evm_frame_counter >= EVM_HOLD_FRAMES)
-        {
-            evm_frame_counter = 0;
-
-            evm_signal_index =
-                (evm_signal_index + 1) %
-                EVM_SIGNALS.size();
-
-            result = render_evm_signal();
-        }
-
-        return result;
     };
 
     // Solid LED indicates successful initialization.
     set_status_led(true);
 
+    absolute_time_t next_potentiometer_print = get_absolute_time();
+    absolute_time_t next_evm_signal =
+        make_timeout_time_ms(EVM_SIGNAL_INTERVAL_MS);
+
+    const auto run_potentiometer_test_if_due = [&]()
+    {
+        if (absolute_time_diff_us(
+                get_absolute_time(),
+                next_potentiometer_print
+            ) <= 0)
+        {
+            train_controller::tests::print_potentiometer("THROTTLE",throttle);
+
+            next_potentiometer_print = make_timeout_time_ms(
+                POTENTIOMETER_PRINT_INTERVAL_MS
+            );
+        }
+    };
+
+    std::array<char, 32> serial_line {};
+    std::size_t serial_line_length = 0;
+    std::uint16_t displayed_speed = 0;
+    bool speed_display_dirty = true;
+
+    const auto process_serial_input = [&]()
+    {
+        while (true)
+        {
+            const int character = getchar_timeout_us(0);
+
+            if (character == PICO_ERROR_TIMEOUT)
+            {
+                return;
+            }
+
+            if (character == '\r')
+            {
+                continue;
+            }
+
+            if (character != '\n')
+            {
+                if (serial_line_length < serial_line.size())
+                {
+                    serial_line[serial_line_length++] =
+                        static_cast<char>(character);
+                }
+                else
+                {
+                    // Discard an overlong or malformed line.
+                    serial_line_length = 0;
+                }
+
+                continue;
+            }
+
+            constexpr std::array<char, 6> SPEED_PREFIX {
+                'S', 'P', 'E', 'E', 'D', '='
+            };
+
+            bool valid_speed_message =
+                serial_line_length > SPEED_PREFIX.size();
+
+            for (std::size_t index = 0;
+                 valid_speed_message && index < SPEED_PREFIX.size();
+                 ++index)
+            {
+                valid_speed_message =
+                    serial_line[index] == SPEED_PREFIX[index];
+            }
+
+            std::uint32_t received_speed = 0;
+
+            for (std::size_t index = SPEED_PREFIX.size();
+                 valid_speed_message && index < serial_line_length;
+                 ++index)
+            {
+                const char digit = serial_line[index];
+
+                if (digit < '0' || digit > '9')
+                {
+                    valid_speed_message = false;
+                    break;
+                }
+
+                received_speed =
+                    received_speed * 10u +
+                    static_cast<std::uint32_t>(digit - '0');
+            }
+
+            if (valid_speed_message)
+            {
+                const std::uint16_t limited_speed =
+                    received_speed > MAXIMUM_SPEED
+                        ? MAXIMUM_SPEED
+                        : static_cast<std::uint16_t>(received_speed);
+
+                if (limited_speed != displayed_speed)
+                {
+                    displayed_speed = limited_speed;
+                    speed_display_dirty = true;
+                }
+
+                std::printf(
+                    "RECEIVED_SPEED=%lu\n",
+                    static_cast<unsigned long>(received_speed)
+                );
+            }
+
+            serial_line_length = 0;
+        }
+    };
+
+    const auto update_evm_if_due = [&]() -> I2cResult
+    {
+        if (absolute_time_diff_us(
+                get_absolute_time(),
+                next_evm_signal
+            ) > 0)
+        {
+            return I2cResult::Ok;
+        }
+
+        evm_signal_index =
+            (evm_signal_index + 1) % EVM_SIGNALS.size();
+
+        next_evm_signal =
+            make_timeout_time_ms(EVM_SIGNAL_INTERVAL_MS);
+
+        return render_evm_signal();
+    };
+
     while (true)
     {
-        // Acceleration: 0 → 160 km/h.
-        for (std::uint16_t speed = 0;
-             speed <= MAXIMUM_SPEED;
-             speed += ANIMATION_STEP)
+        process_serial_input();
+        run_potentiometer_test_if_due();
+
+        if (speed_display_dirty)
         {
-            if (render_frame(speed) != I2cResult::Ok)
+            if (render_speed(displayed_speed) != I2cResult::Ok)
             {
                 blink_error(500);
             }
 
-            sleep_ms(FRAME_DELAY_MS);
+            speed_display_dirty = false;
         }
 
-        // Deceleration: 158 → 0 km/h.
-        for (std::int32_t speed =
-                 MAXIMUM_SPEED - ANIMATION_STEP;
-             speed >= 0;
-             speed -= ANIMATION_STEP)
+        if (update_evm_if_due() != I2cResult::Ok)
         {
-            if (render_frame(
-                    static_cast<std::uint16_t>(speed)
-                ) != I2cResult::Ok)
-            {
-                blink_error(500);
-            }
-
-            sleep_ms(FRAME_DELAY_MS);
+            blink_error(600);
         }
+
+        sleep_ms(MAIN_LOOP_DELAY_MS);
     }
 }

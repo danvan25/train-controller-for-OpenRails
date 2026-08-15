@@ -38,11 +38,14 @@ pico_sdk_init()
 add_executable(firmware
     firmware.cpp
     src/hal/i2c_master.cpp
-    src/hal/i2c_master.cpp
     src/drivers/sh1106.cpp
     src/graphics/framebuffer.cpp
     src/graphics/speed_gauge.cpp
     src/graphics/evm_display.cpp
+    src/inputs/linear_potentiometer.cpp
+    src/tests/potentiometer_test.cpp
+    src/inputs/linear_potentiometer.cpp
+    src/tests/potentiometer_test.cpp
 )
 
 pico_set_program_name(firmware "firmware")
@@ -54,7 +57,9 @@ pico_enable_stdio_usb(firmware 1)
 
 # Add the standard library to the build
 target_link_libraries(firmware
-        pico_stdlib)
+    pico_stdlib
+    hardware_adc
+)
 
 # Add the standard include files to the build
 target_include_directories(firmware PRIVATE
