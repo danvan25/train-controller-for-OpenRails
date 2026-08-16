@@ -89,6 +89,55 @@ std::optional<int> json_integer(
     ));
 }
 
+std::optional<double> json_number(
+    std::string_view object,
+    std::string_view field
+) {
+    const std::string key = "\"" + std::string(field) + "\"";
+    const std::size_t key_position = object.find(key);
+
+    if (key_position == std::string_view::npos) {
+        return std::nullopt;
+    }
+
+    const std::size_t colon = object.find(':', key_position + key.size());
+
+    if (colon == std::string_view::npos) {
+        return std::nullopt;
+    }
+
+    std::size_t number_begin = colon + 1;
+
+    while (number_begin < object.size() &&
+           std::isspace(static_cast<unsigned char>(object[number_begin]))) {
+        ++number_begin;
+    }
+
+    std::size_t number_end = number_begin;
+
+    if (number_end < object.size() && object[number_end] == '-') {
+        ++number_end;
+    }
+
+    while (number_end < object.size() &&
+           (std::isdigit(static_cast<unsigned char>(object[number_end])) ||
+            object[number_end] == '.')) {
+        ++number_end;
+    }
+
+    if (number_end == number_begin) {
+        return std::nullopt;
+    }
+
+    try {
+        return std::stod(std::string(
+            object.substr(number_begin, number_end - number_begin)
+        ));
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
 std::optional<double> first_number(std::string text) {
     const std::size_t number_begin =
         text.find_first_of("-0123456789");
@@ -405,6 +454,48 @@ double OpenRailsClient::get_speed_kmh() {
     }
 
     return *speed;
+}
+
+std::optional<unsigned> OpenRailsClient::get_throttle_percentage() {
+    const std::string response_body = get(L"/API/CABCONTROLS");
+    std::size_t object_begin = 0;
+
+    while (true) {
+        object_begin = response_body.find('{', object_begin);
+
+        if (object_begin == std::string::npos) {
+            return std::nullopt;
+        }
+
+        const std::size_t object_end =
+            response_body.find('}', object_begin + 1);
+
+        if (object_end == std::string::npos) {
+            return std::nullopt;
+        }
+
+        const std::string_view object(
+            response_body.data() + object_begin,
+            object_end - object_begin + 1
+        );
+
+        const auto type_name = json_string(object, "TypeName");
+
+        if (type_name.has_value() && *type_name == "THROTTLE") {
+            const auto fraction = json_number(object, "RangeFraction");
+
+            if (!fraction.has_value()) {
+                return std::nullopt;
+            }
+
+            const double limited_fraction =
+                std::clamp(*fraction, 0.0, 1.0);
+
+            return static_cast<unsigned>(limited_fraction * 100.0 + 0.5);
+        }
+
+        object_begin = object_end + 1;
+    }
 }
 
 std::optional<NextSignalInfo> OpenRailsClient::get_next_signal() {

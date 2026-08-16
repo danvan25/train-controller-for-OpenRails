@@ -12,6 +12,8 @@
 
 int main(int argc, char* argv[])
 {
+    constexpr int THROTTLE_PICKUP_TOLERANCE = 2;
+
     if (argc != 2)
     {
         std::cerr
@@ -35,54 +37,217 @@ int main(int argc, char* argv[])
         std::string line;
 
         std::optional<int> last_throttle;
+        std::optional<int> physical_throttle;
+        std::optional<int> open_rails_throttle;
         std::optional<int> last_sent_speed;
         std::optional<train_controller::bridge::SignalAspect>
             last_signal_aspect;
         std::optional<int> last_signal_limit;
         std::optional<std::string> last_signal_error;
+        std::optional<std::string> last_speed_error;
+        std::optional<std::string> last_throttle_error;
+        std::optional<std::string> last_throttle_feedback_error;
+        std::optional<DWORD> last_serial_write_error;
         std::optional<train_controller::bridge::EvmState>
             last_evm_state;
         bool signal_state_initialized = false;
         bool last_signal_was_present = false;
+        bool throttle_pickup_active = false;
 
         auto last_speed_request =
             std::chrono::steady_clock::now();
 
+        std::chrono::milliseconds speed_request_interval(1000);
+        std::chrono::milliseconds signal_request_interval(3000);
+
+        auto last_throttle_feedback_request =
+            std::chrono::steady_clock::now();
+
+        const std::chrono::milliseconds
+            throttle_feedback_interval(2000);
+
+        std::optional<std::chrono::steady_clock::time_point>
+            last_throttle_command;
+
         auto last_signal_request =
             std::chrono::steady_clock::now();
+
+        const auto send_to_pico =
+            [&](const std::string& message) -> bool
+            {
+                if (serial_port.write_line(message))
+                {
+                    if (last_serial_write_error.has_value())
+                    {
+                        std::cout
+                            << "Serial communication recovered.\n";
+                        last_serial_write_error.reset();
+                    }
+
+                    return true;
+                }
+
+                const DWORD error_code =
+                    serial_port.last_write_error();
+
+                if (!last_serial_write_error.has_value() ||
+                    error_code != *last_serial_write_error)
+                {
+                    std::cerr
+                        << "Serial write error: Windows error: "
+                        << error_code
+                        << ". Retrying later.\n";
+                    last_serial_write_error = error_code;
+                }
+
+                return false;
+            };
 
         while (true)
         {
             const auto now =
                 std::chrono::steady_clock::now();
 
-            if (now - last_speed_request >=
-                std::chrono::milliseconds(500))
+            if (now - last_speed_request >= speed_request_interval)
             {
-                const double speed =
-                    open_rails.get_speed_kmh();
-
-                const int rounded_speed =
-                    static_cast<int>(
-                        std::lround(std::abs(speed))
-                    );
-
-                if (!last_sent_speed.has_value() ||
-                    rounded_speed != *last_sent_speed)
+                try
                 {
-                    const std::string speed_message =
-                        "SPEED=" + std::to_string(rounded_speed);
+                    const double speed =
+                        open_rails.get_speed_kmh();
 
-                    serial_port.write_line(speed_message);
+                    if (last_speed_error.has_value())
+                    {
+                        std::cout << "Speed API recovered.\n";
+                        last_speed_error.reset();
+                    }
 
-                    last_sent_speed = rounded_speed;
+                    speed_request_interval =
+                        std::chrono::milliseconds(1000);
+
+                    const int rounded_speed =
+                        static_cast<int>(
+                            std::lround(std::abs(speed))
+                        );
+
+                    if (!last_sent_speed.has_value() ||
+                        rounded_speed != *last_sent_speed)
+                    {
+                        const std::string speed_message =
+                            "SPEED=" + std::to_string(rounded_speed);
+
+                        if (send_to_pico(speed_message))
+                        {
+                            last_sent_speed = rounded_speed;
+                        }
+                    }
+                }
+                catch (const std::exception& error)
+                {
+                    const std::string error_message = error.what();
+
+                    if (!last_speed_error.has_value() ||
+                        error_message != *last_speed_error)
+                    {
+                        std::cerr
+                            << "Speed API error: "
+                            << error_message
+                            << " Retrying later.\n";
+                        last_speed_error = error_message;
+                    }
+
+                    speed_request_interval *= 2;
+
+                    if (speed_request_interval >
+                        std::chrono::seconds(15))
+                    {
+                        speed_request_interval =
+                            std::chrono::seconds(15);
+                    }
                 }
 
                 last_speed_request = now;
             }
 
-            if (now - last_signal_request >=
-                std::chrono::seconds(2))
+            if (now - last_throttle_feedback_request >=
+                throttle_feedback_interval)
+            {
+                try
+                {
+                    const auto feedback =
+                        open_rails.get_throttle_percentage();
+
+                    if (last_throttle_feedback_error.has_value())
+                    {
+                        std::cout
+                            << "Throttle feedback API recovered.\n";
+                        last_throttle_feedback_error.reset();
+                    }
+
+                    if (feedback.has_value())
+                    {
+                        open_rails_throttle =
+                            static_cast<int>(*feedback);
+
+                        const bool command_settling =
+                            last_throttle_command.has_value() &&
+                            now - *last_throttle_command <
+                                std::chrono::milliseconds(750);
+
+                        if (throttle_pickup_active &&
+                            last_throttle.has_value() &&
+                            !command_settling &&
+                            std::abs(*open_rails_throttle -
+                                     *last_throttle) >
+                                THROTTLE_PICKUP_TOLERANCE)
+                        {
+                            throttle_pickup_active = false;
+
+                            std::cout
+                                << "Throttle pickup waiting: Open Rails="
+                                << *open_rails_throttle
+                                << "%, physical="
+                                << (physical_throttle.has_value()
+                                        ? std::to_string(*physical_throttle) +
+                                              "%"
+                                        : std::string("unknown"))
+                                << '\n';
+                        }
+
+                        if (!throttle_pickup_active &&
+                            physical_throttle.has_value() &&
+                            std::abs(*physical_throttle -
+                                     *open_rails_throttle) <=
+                                THROTTLE_PICKUP_TOLERANCE)
+                        {
+                            throttle_pickup_active = true;
+                            last_throttle = *physical_throttle;
+
+                            std::cout
+                                << "Throttle pickup acquired at "
+                                << *physical_throttle
+                                << "%.\n";
+                        }
+                    }
+                }
+                catch (const std::exception& error)
+                {
+                    const std::string error_message = error.what();
+
+                    if (!last_throttle_feedback_error.has_value() ||
+                        error_message != *last_throttle_feedback_error)
+                    {
+                        std::cerr
+                            << "Throttle feedback API error: "
+                            << error_message
+                            << " Retrying later.\n";
+                        last_throttle_feedback_error = error_message;
+                    }
+                }
+
+                last_throttle_feedback_request = now;
+            }
+
+            if (now - last_signal_request >= signal_request_interval)
             {
                 try
                 {
@@ -94,6 +259,9 @@ int main(int argc, char* argv[])
                         std::cout << "Signal API recovered.\n";
                         last_signal_error.reset();
                     }
+
+                    signal_request_interval =
+                        std::chrono::milliseconds(3000);
 
                     if (signal.has_value())
                     {
@@ -174,14 +342,21 @@ int main(int argc, char* argv[])
                         if (!last_evm_state.has_value() ||
                             evm_state != *last_evm_state)
                         {
-                            std::cout
-                                << "EVM="
-                                << train_controller::bridge::to_string(
-                                       evm_state
-                                   )
-                                << '\n';
+                            const std::string evm_message =
+                                "EVM=" + std::string(
+                                    train_controller::bridge::to_string(
+                                        evm_state
+                                    )
+                                );
 
-                            last_evm_state = evm_state;
+                            if (send_to_pico(evm_message))
+                            {
+                                std::cout
+                                    << evm_message
+                                    << " -> Pico\n";
+
+                                last_evm_state = evm_state;
+                            }
                         }
                     }
                     else if (!signal_state_initialized ||
@@ -201,8 +376,12 @@ int main(int argc, char* argv[])
                         if (!last_evm_state.has_value() ||
                             evm_state != *last_evm_state)
                         {
-                            std::cout << "EVM=NO_SIGNAL\n";
-                            last_evm_state = evm_state;
+                            if (send_to_pico("EVM=NO_SIGNAL"))
+                            {
+                                std::cout
+                                    << "EVM=NO_SIGNAL -> Pico\n";
+                                last_evm_state = evm_state;
+                            }
                         }
                     }
                 }
@@ -219,6 +398,15 @@ int main(int argc, char* argv[])
                             << " Retrying later.\n";
 
                         last_signal_error = error_message;
+                    }
+
+                    signal_request_interval *= 2;
+
+                    if (signal_request_interval >
+                        std::chrono::seconds(15))
+                    {
+                        signal_request_interval =
+                            std::chrono::seconds(15);
                     }
                 }
 
@@ -248,6 +436,12 @@ int main(int argc, char* argv[])
                 continue;
             }
 
+            if (line == "RECEIVED_EVM=OK")
+            {
+                line.clear();
+                continue;
+            }
+
             const auto message =
                 train_controller::bridge::MessageParser::parse(line);
 
@@ -271,14 +465,81 @@ int main(int argc, char* argv[])
                         << message->value
                         << '\n';
                 }
-                else if (!last_throttle.has_value() ||
-                         message->value != *last_throttle)
+                else
                 {
-                    open_rails.set_throttle(
-                        static_cast<unsigned>(message->value)
-                    );
+                    physical_throttle = message->value;
 
-                    last_throttle = message->value;
+                    if (!throttle_pickup_active &&
+                        open_rails_throttle.has_value() &&
+                        std::abs(*physical_throttle -
+                                 *open_rails_throttle) <=
+                            THROTTLE_PICKUP_TOLERANCE)
+                    {
+                        throttle_pickup_active = true;
+                        last_throttle = *physical_throttle;
+
+                        std::cout
+                            << "Throttle pickup acquired at "
+                            << *physical_throttle
+                            << "%.\n";
+                    }
+
+                    if (throttle_pickup_active &&
+                        (!last_throttle.has_value() ||
+                         message->value != *last_throttle))
+                    {
+                        try
+                        {
+                            open_rails.set_throttle(
+                                static_cast<unsigned>(message->value)
+                            );
+
+                            if (last_throttle_error.has_value())
+                            {
+                                std::cout
+                                    << "Throttle API recovered.\n";
+                                last_throttle_error.reset();
+                            }
+
+                            last_throttle = message->value;
+                            last_throttle_command =
+                                std::chrono::steady_clock::now();
+                        }
+                        catch (const std::exception& error)
+                        {
+                            const std::string error_message = error.what();
+
+                            if (!last_throttle_error.has_value() ||
+                                error_message != *last_throttle_error)
+                            {
+                                std::cerr
+                                    << "Throttle API error: "
+                                    << error_message
+                                    << " Retrying when input is received.\n";
+                                last_throttle_error = error_message;
+                            }
+                        }
+                    }
+                    else if (!throttle_pickup_active &&
+                             open_rails_throttle.has_value())
+                    {
+                        static std::optional<int>
+                            last_reported_physical_throttle;
+
+                        if (!last_reported_physical_throttle.has_value() ||
+                            message->value !=
+                                *last_reported_physical_throttle)
+                        {
+                            std::cout
+                                << "Throttle pickup waiting: Open Rails="
+                                << *open_rails_throttle
+                                << "%, physical="
+                                << message->value
+                                << "%\n";
+                            last_reported_physical_throttle =
+                                message->value;
+                        }
+                    }
                 }
             }
 

@@ -41,6 +41,7 @@ public:
     OpenRailsClient& operator=(OpenRailsClient&&) = delete;
 
     void set_throttle(unsigned percentage);
+    std::optional<unsigned> get_throttle_percentage();
     double get_speed_kmh();
     std::optional<NextSignalInfo> get_next_signal();
 
