@@ -11,6 +11,7 @@ add_executable(openrails_bridge
     src/serial_port.cpp
     src/message_parser.cpp
     src/openrails_client.cpp
+    src/evm_mapper.cpp
 )
 
 target_include_directories(openrails_bridge
