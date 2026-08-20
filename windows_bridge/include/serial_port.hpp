@@ -16,7 +16,8 @@ public:
     SerialPort& operator=(const SerialPort&) = delete;
     SerialPort(SerialPort&&) = delete;
     SerialPort& operator=(SerialPort&&) = delete;
-    void write_line(std::string_view line);
+    bool write_line(std::string_view line);
+    DWORD last_write_error() const;
 
     bool read_character(char& character);
 
@@ -25,6 +26,7 @@ private:
     void configure_timeouts();
 
     HANDLE handle_ = INVALID_HANDLE_VALUE;
+    DWORD last_write_error_ = ERROR_SUCCESS;
 };
 
 }  // namespace train_controller::bridge
