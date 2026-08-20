@@ -24,7 +24,21 @@ std::uint16_t LinearPotentiometer::read_raw() const
 {
     adc_select_input(adc_channel_);
 
-    return adc_read();
+    // The first conversion after switching ADC channels may still contain
+    // charge from the previously selected input, so discard it.
+    static_cast<void>(adc_read());
+
+    constexpr std::uint32_t SAMPLE_COUNT = 4;
+    std::uint32_t sum = 0;
+
+    for (std::uint32_t sample = 0; sample < SAMPLE_COUNT; ++sample)
+    {
+        sum += adc_read();
+    }
+
+    return static_cast<std::uint16_t>(
+        (sum + SAMPLE_COUNT / 2u) / SAMPLE_COUNT
+    );
 }
 
 std::uint8_t LinearPotentiometer::read_percentage() const
