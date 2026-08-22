@@ -1,4 +1,4 @@
-# Train Controller for Open Rails â Roadmap
+# Train Controller for Open Rails — Roadmap
 
 This roadmap tracks the development of a physical train controller for
 [Open Rails](https://www.openrails.org/). The project combines register-level
@@ -17,7 +17,7 @@ the final control-panel design become clearer.
 - Keep every milestone buildable, testable, documented, and suitable for a Git commit.
 - Separate firmware, desktop integration, hardware design, and documentation.
 
-## Milestone 0 â Development environment
+## Milestone 0 — Development environment
 
 Status: **Completed**
 
@@ -32,9 +32,9 @@ Status: **Completed**
 - [x] Implement and test register-level control of the onboard LED.
 - [x] Handle the RP2350 GPIO pad isolation during initialization.
 
-## Milestone 1 â GPIO subsystem
+## Milestone 1 — GPIO subsystem
 
-Status: **Planned â onboard status LED completed**
+Status: **Planned — onboard status LED completed**
 
 - [ ] Study the RP2350 SIO, IO Bank 0, and Pads Bank 0 registers.
 - [ ] Create a reusable register-level GPIO driver.
@@ -48,9 +48,9 @@ Status: **Planned â onboard status LED completed**
 - [ ] Detect invalid three-position switch states.
 - [ ] Create a GPIO diagnostic test program.
 
-## Milestone 2 â Analog controls
+## Milestone 2 — Analog controls
 
-Status: **In progress â three analog controls operational**
+Status: **In progress — three analog controls operational**
 
 - [ ] Study the RP2350 ADC registers and conversion process.
 - [ ] Create a register-level ADC driver.
@@ -65,9 +65,9 @@ Status: **In progress â three analog controls operational**
 - [ ] Detect disconnected or invalid analog controls where possible.
 - [x] Create USB serial output for analog-input diagnostics.
 
-## Milestone 3 â I2C subsystem
+## Milestone 3 — I2C subsystem
 
-Status: **Operational â bus recovery remains planned**
+Status: **Operational — bus recovery remains planned**
 
 - [x] Study the RP2350 I2C controller registers.
 - [x] Create a register-level I2C master driver.
@@ -83,7 +83,7 @@ Status: **Operational â bus recovery remains planned**
 - [x] Validate alternative I2C0 pin assignments.
 - [x] Create a dual-bus I2C diagnostic firmware target.
 
-## Milestone 4 â SH1106 OLED displays
+## Milestone 4 — SH1106 OLED displays
 
 Status: **Completed for the current prototype**
 
@@ -91,7 +91,7 @@ Status: **Completed for the current prototype**
 - [x] Create a custom SH1106 driver without Arduino display libraries.
 - [x] Initialize SH1106 OLED displays.
 - [x] Send commands and display data over the custom I2C driver.
-- [x] Implement a 128Ă64 monochrome framebuffer.
+- [x] Implement a 128×64 monochrome framebuffer.
 - [x] Account for the SH1106 controller's 132-column display RAM.
 - [x] Implement the graphics primitives required by the current displays.
 - [ ] Create or integrate a project-owned bitmap font format.
@@ -101,7 +101,7 @@ Status: **Completed for the current prototype**
 - [x] Raise the I2C refresh rate during initial display optimization.
 - [x] Operate both OLEDs from an external 3.3 V supply with a common ground.
 
-## Milestone 5 â Controller firmware architecture
+## Milestone 5 — Controller firmware architecture
 
 Status: **In progress**
 
@@ -117,7 +117,7 @@ Status: **In progress**
 - [ ] Add firmware version information.
 - [ ] Document timing, memory, and CPU usage.
 
-## Milestone 6 â USB communication
+## Milestone 6 — USB communication
 
 Status: **Operational using USB CDC; final protocol design remains planned**
 
@@ -136,9 +136,9 @@ Status: **Operational using USB CDC; final protocol design remains planned**
 - [ ] Complete automatic USB disconnect and reconnect recovery.
 - [ ] Document the USB protocol.
 
-## Milestone 7 â Open Rails integration
+## Milestone 7 — Open Rails integration
 
-Status: **In progress â core bidirectional integration operational**
+Status: **In progress — core bidirectional integration operational**
 
 - [x] Identify and use the Open Rails HTTP API on localhost:2150.
 - [x] Map throttle, train brake, and engine brake through CABCONTROLS.
@@ -157,28 +157,28 @@ Status: **In progress â core bidirectional integration operational**
 - [ ] Move profile definitions to user-editable configuration files.
 - [ ] Document supported locomotives and known limitations.
 
-## Milestone 8 â Physical controls
+## Milestone 8 — Physical controls
 
-Status: **In progress â analog controls and displays operational**
+Status: **In progress — analog controls and displays operational**
 
 ### Analog controls
 
-- [x] Traction controller â 1 kÎŠ linear slide potentiometer.
-- [x] Train brake â 1 kÎŠ linear slide potentiometer.
-- [x] Profile-dependent secondary brake â 1 kÎŠ linear slide potentiometer.
+- [x] Traction controller — 1 kΩ linear slide potentiometer.
+- [x] Train brake — 1 kΩ linear slide potentiometer.
+- [x] Profile-dependent secondary brake — 1 kΩ linear slide potentiometer.
 
 ### Buttons and switches
 
-- [ ] Vigilance control â momentary push button.
-- [ ] Windshield wiper â two-position switch.
-- [ ] Headlights â three-position switch.
-- [ ] Sander â momentary push button.
-- [ ] Horn â momentary push button.
-- [ ] Reverser â three-position switch.
-- [ ] Cab interior light â two-position switch.
-- [ ] Pantograph 1 â two-position switch.
-- [ ] Pantograph 2 â two-position switch.
-- [ ] Emergency brake â push button.
+- [ ] Vigilance control — momentary push button.
+- [ ] Windshield wiper — two-position switch.
+- [ ] Headlights — three-position switch.
+- [ ] Sander — momentary push button.
+- [ ] Horn — momentary push button.
+- [ ] Reverser — three-position switch.
+- [ ] Cab interior light — two-position switch.
+- [ ] Pantograph 1 — two-position switch.
+- [ ] Pantograph 2 — two-position switch.
+- [ ] Emergency brake — push button.
 - [ ] Five configurable auxiliary buttons.
 
 ### Displayed information
@@ -189,14 +189,14 @@ Status: **In progress â analog controls and displays operational**
 - [ ] USB and simulator connection status.
 - [ ] Calibration and diagnostics information.
 
-## Milestone 9 â Hardware design
+## Milestone 9 — Hardware design
 
 Status: **Breadboard prototype in progress**
 
 - [ ] Create the final Pico 2 pin assignment.
 - [x] Verify the ADC resource budget for three analog controls.
 - [ ] Create a complete schematic.
-- [x] Select and test 1 kÎŠ linear slide potentiometers.
+- [x] Select and test 1 kΩ linear slide potentiometers.
 - [ ] Select mechanically appropriate buttons and switches.
 - [ ] Design 3.3 V-safe analog input circuits.
 - [ ] Add power filtering and decoupling.
@@ -209,7 +209,7 @@ Status: **Breadboard prototype in progress**
 - [ ] Add labels and serviceable internal wiring.
 - [ ] Produce a bill of materials.
 
-## Milestone 10 â Integration, testing, and release
+## Milestone 10 — Integration, testing, and release
 
 Status: **In progress**
 
