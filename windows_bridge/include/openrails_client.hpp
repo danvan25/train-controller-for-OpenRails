@@ -31,6 +31,8 @@ struct NextSignalInfo {
 struct CabControlState {
     std::optional<unsigned> throttle_percentage;
     std::optional<unsigned> train_brake_percentage;
+    std::optional<unsigned> engine_brake_percentage;
+    std::optional<unsigned> dynamic_brake_percentage;
 };
 
 const char* to_string(SignalAspect aspect);
@@ -47,6 +49,8 @@ public:
 
     void set_throttle(unsigned percentage);
     void set_train_brake(unsigned percentage);
+    void set_engine_brake(unsigned percentage);
+    void set_dynamic_brake(unsigned percentage);
     CabControlState get_cab_controls();
     double get_speed_kmh();
     std::optional<NextSignalInfo> get_next_signal();

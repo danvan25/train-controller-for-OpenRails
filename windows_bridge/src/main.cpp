@@ -1,3 +1,4 @@
+#include "control_profile.hpp"
 #include "evm_mapper.hpp"
 #include "message_parser.hpp"
 #include "openrails_client.hpp"
@@ -14,12 +15,29 @@ int main(int argc, char* argv[])
 {
     constexpr int THROTTLE_PICKUP_TOLERANCE = 2;
     constexpr int TRAIN_BRAKE_PICKUP_TOLERANCE = 2;
+    constexpr int SECONDARY_BRAKE_PICKUP_TOLERANCE = 2;
 
-    if (argc != 2)
+    if (argc < 2 || argc > 3)
     {
         std::cerr
-            << "Usage: openrails_bridge.exe COM_PORT\n"
-            << "Example: openrails_bridge.exe COM7\n";
+            << "Usage: openrails_bridge.exe COM_PORT [PROFILE]\n"
+            << "Example: openrails_bridge.exe COM7 "
+            << "conventional_locomotive\n";
+
+        return 1;
+    }
+
+    const auto profile = argc == 3
+        ? train_controller::bridge::find_control_profile(argv[2])
+        : std::optional<train_controller::bridge::ControlProfile>(
+              train_controller::bridge::default_control_profile()
+          );
+
+    if (!profile.has_value())
+    {
+        std::cerr
+            << "Unknown control profile: " << argv[2] << '\n'
+            << "Available profile: conventional_locomotive\n";
 
         return 1;
     }
@@ -32,6 +50,9 @@ int main(int argc, char* argv[])
         std::cout
             << "Connected to " << argv[1] << '\n'
             << "Open Rails API: localhost:2150\n"
+            << "Control profile: " << profile->name << '\n'
+            << "Secondary brake target: "
+            << profile->open_rails_control_name << '\n'
             << "Waiting for state changes...\n"
             << "Press Ctrl+C to stop.\n\n";
 
@@ -43,6 +64,9 @@ int main(int argc, char* argv[])
         std::optional<int> last_train_brake;
         std::optional<int> physical_train_brake;
         std::optional<int> open_rails_train_brake;
+        std::optional<int> last_secondary_brake;
+        std::optional<int> physical_secondary_brake;
+        std::optional<int> open_rails_secondary_brake;
         std::optional<int> last_sent_speed;
         std::optional<train_controller::bridge::SignalAspect>
             last_signal_aspect;
@@ -52,6 +76,7 @@ int main(int argc, char* argv[])
         std::optional<std::string> last_throttle_error;
         std::optional<std::string> last_throttle_feedback_error;
         std::optional<std::string> last_train_brake_error;
+        std::optional<std::string> last_secondary_brake_error;
         std::optional<DWORD> last_serial_write_error;
         std::optional<train_controller::bridge::EvmState>
             last_evm_state;
@@ -60,6 +85,8 @@ int main(int argc, char* argv[])
         bool throttle_pickup_active = false;
         bool train_brake_pickup_active = false;
         bool train_brake_control_missing_reported = false;
+        bool secondary_brake_pickup_active = false;
+        bool secondary_brake_control_missing_reported = false;
 
         auto last_speed_request =
             std::chrono::steady_clock::now();
@@ -77,6 +104,8 @@ int main(int argc, char* argv[])
             last_throttle_command;
         std::optional<std::chrono::steady_clock::time_point>
             last_train_brake_command;
+        std::optional<std::chrono::steady_clock::time_point>
+            last_secondary_brake_command;
 
         auto last_signal_request =
             std::chrono::steady_clock::now();
@@ -110,6 +139,47 @@ int main(int argc, char* argv[])
                 }
 
                 return false;
+            };
+
+        const auto secondary_brake_feedback =
+            [&](const train_controller::bridge::CabControlState& feedback)
+                -> std::optional<unsigned>
+            {
+                using train_controller::bridge::SecondaryBrakeTarget;
+
+                switch (profile->secondary_brake_target)
+                {
+                    case SecondaryBrakeTarget::EngineBrake:
+                        return feedback.engine_brake_percentage;
+
+                    case SecondaryBrakeTarget::DynamicBrake:
+                        return feedback.dynamic_brake_percentage;
+
+                    case SecondaryBrakeTarget::Ignored:
+                        return std::nullopt;
+                }
+
+                return std::nullopt;
+            };
+
+        const auto set_secondary_brake =
+            [&](unsigned percentage)
+            {
+                using train_controller::bridge::SecondaryBrakeTarget;
+
+                switch (profile->secondary_brake_target)
+                {
+                    case SecondaryBrakeTarget::EngineBrake:
+                        open_rails.set_engine_brake(percentage);
+                        return;
+
+                    case SecondaryBrakeTarget::DynamicBrake:
+                        open_rails.set_dynamic_brake(percentage);
+                        return;
+
+                    case SecondaryBrakeTarget::Ignored:
+                        return;
+                }
             };
 
         while (true)
@@ -296,6 +366,73 @@ int main(int argc, char* argv[])
                             << "TRAIN_BRAKE control was not found in "
                             << "Open Rails CABCONTROLS.\n";
                         train_brake_control_missing_reported = true;
+                    }
+
+                    const auto current_secondary_brake =
+                        secondary_brake_feedback(feedback);
+
+                    if (current_secondary_brake.has_value())
+                    {
+                        secondary_brake_control_missing_reported = false;
+                        open_rails_secondary_brake =
+                            static_cast<int>(*current_secondary_brake);
+
+                        const bool secondary_command_settling =
+                            last_secondary_brake_command.has_value() &&
+                            now - *last_secondary_brake_command <
+                                std::chrono::milliseconds(750);
+
+                        if (secondary_brake_pickup_active &&
+                            last_secondary_brake.has_value() &&
+                            !secondary_command_settling &&
+                            std::abs(*open_rails_secondary_brake -
+                                     *last_secondary_brake) >
+                                SECONDARY_BRAKE_PICKUP_TOLERANCE)
+                        {
+                            secondary_brake_pickup_active = false;
+
+                            std::cout
+                                << "Secondary brake pickup waiting: "
+                                << "Open Rails="
+                                << *open_rails_secondary_brake
+                                << "%, physical="
+                                << (physical_secondary_brake.has_value()
+                                        ? std::to_string(
+                                              *physical_secondary_brake
+                                          ) + "%"
+                                        : std::string("unknown"))
+                                << '\n';
+                        }
+
+                        if (!secondary_brake_pickup_active &&
+                            physical_secondary_brake.has_value() &&
+                            std::abs(*physical_secondary_brake -
+                                     *open_rails_secondary_brake) <=
+                                SECONDARY_BRAKE_PICKUP_TOLERANCE)
+                        {
+                            secondary_brake_pickup_active = true;
+                            last_secondary_brake =
+                                *physical_secondary_brake;
+
+                            std::cout
+                                << "Secondary brake pickup acquired at "
+                                << *physical_secondary_brake
+                                << "% ("
+                                << profile->open_rails_control_name
+                                << ").\n";
+                        }
+                    }
+                    else if (
+                        profile->secondary_brake_target !=
+                            train_controller::bridge::
+                                SecondaryBrakeTarget::Ignored &&
+                        !secondary_brake_control_missing_reported)
+                    {
+                        std::cerr
+                            << profile->open_rails_control_name
+                            << " control was not found in Open Rails "
+                            << "CABCONTROLS.\n";
+                        secondary_brake_control_missing_reported = true;
                     }
                 }
                 catch (const std::exception& error)
@@ -723,6 +860,115 @@ int main(int argc, char* argv[])
                                 << message->value
                                 << "%\n";
                             last_reported_physical_train_brake =
+                                message->value;
+                        }
+                    }
+                }
+            }
+
+            if (message->key == "SECONDARY_BRAKE")
+            {
+                if (message->value < 0 || message->value > 100)
+                {
+                    std::cerr
+                        << "Invalid secondary brake value: "
+                        << message->value
+                        << '\n';
+                }
+                else
+                {
+                    const auto previous_physical_secondary_brake =
+                        physical_secondary_brake;
+                    physical_secondary_brake = message->value;
+
+                    const bool crossed_secondary_brake_target =
+                        previous_physical_secondary_brake.has_value() &&
+                        open_rails_secondary_brake.has_value() &&
+                        ((*previous_physical_secondary_brake <=
+                              *open_rails_secondary_brake &&
+                          *physical_secondary_brake >=
+                              *open_rails_secondary_brake) ||
+                         (*previous_physical_secondary_brake >=
+                              *open_rails_secondary_brake &&
+                          *physical_secondary_brake <=
+                              *open_rails_secondary_brake));
+
+                    if (!secondary_brake_pickup_active &&
+                        open_rails_secondary_brake.has_value() &&
+                        (std::abs(*physical_secondary_brake -
+                                  *open_rails_secondary_brake) <=
+                             SECONDARY_BRAKE_PICKUP_TOLERANCE ||
+                         crossed_secondary_brake_target))
+                    {
+                        secondary_brake_pickup_active = true;
+                        last_secondary_brake.reset();
+
+                        std::cout
+                            << "Secondary brake pickup acquired at "
+                            << *physical_secondary_brake
+                            << "% ("
+                            << profile->open_rails_control_name
+                            << ").\n";
+                    }
+
+                    if (secondary_brake_pickup_active &&
+                        (!last_secondary_brake.has_value() ||
+                         message->value != *last_secondary_brake))
+                    {
+                        try
+                        {
+                            set_secondary_brake(
+                                static_cast<unsigned>(message->value)
+                            );
+
+                            if (last_secondary_brake_error.has_value())
+                            {
+                                std::cout
+                                    << "Secondary brake API recovered.\n";
+                                last_secondary_brake_error.reset();
+                            }
+
+                            last_secondary_brake = message->value;
+                            last_secondary_brake_command =
+                                std::chrono::steady_clock::now();
+                        }
+                        catch (const std::exception& error)
+                        {
+                            const std::string error_message = error.what();
+
+                            if (!last_secondary_brake_error.has_value() ||
+                                error_message !=
+                                    *last_secondary_brake_error)
+                            {
+                                std::cerr
+                                    << "Secondary brake API error: "
+                                    << error_message
+                                    << " Retrying when input is received.\n";
+                                last_secondary_brake_error = error_message;
+                            }
+                        }
+                    }
+                    else if (!secondary_brake_pickup_active &&
+                             open_rails_secondary_brake.has_value())
+                    {
+                        static std::optional<int>
+                            last_reported_physical_secondary_brake;
+
+                        if (!last_reported_physical_secondary_brake
+                                 .has_value() ||
+                            message->value !=
+                                *last_reported_physical_secondary_brake)
+                        {
+                            std::cout
+                                << "Secondary brake pickup waiting: "
+                                << "Open Rails="
+                                << *open_rails_secondary_brake
+                                << "%, physical="
+                                << message->value
+                                << "% ("
+                                << profile->open_rails_control_name
+                                << ")\n";
+                            last_reported_physical_secondary_brake =
                                 message->value;
                         }
                     }

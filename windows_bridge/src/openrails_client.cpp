@@ -248,6 +248,14 @@ void OpenRailsClient::set_train_brake(unsigned percentage) {
     set_control("TRAIN_BRAKE", percentage);
 }
 
+void OpenRailsClient::set_engine_brake(unsigned percentage) {
+    set_control("ENGINE_BRAKE", percentage);
+}
+
+void OpenRailsClient::set_dynamic_brake(unsigned percentage) {
+    set_control("DYNAMIC_BRAKE", percentage);
+}
+
 void OpenRailsClient::set_control(
     const char* type_name,
     unsigned percentage
@@ -497,7 +505,9 @@ CabControlState OpenRailsClient::get_cab_controls() {
 
         if (type_name.has_value() &&
             (*type_name == "THROTTLE" ||
-             *type_name == "TRAIN_BRAKE")) {
+             *type_name == "TRAIN_BRAKE" ||
+             *type_name == "ENGINE_BRAKE" ||
+             *type_name == "DYNAMIC_BRAKE")) {
             const auto fraction = json_number(object, "RangeFraction");
 
             if (fraction.has_value()) {
@@ -511,8 +521,12 @@ CabControlState OpenRailsClient::get_cab_controls() {
 
                 if (*type_name == "THROTTLE") {
                     state.throttle_percentage = percentage;
-                } else {
+                } else if (*type_name == "TRAIN_BRAKE") {
                     state.train_brake_percentage = percentage;
+                } else if (*type_name == "ENGINE_BRAKE") {
+                    state.engine_brake_percentage = percentage;
+                } else {
+                    state.dynamic_brake_percentage = percentage;
                 }
             }
         }
