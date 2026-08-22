@@ -33,24 +33,32 @@ bool pins_are_valid(const I2cConfig& config)
 {
     if (config.controller == I2cController::I2c0)
     {
-        return config.sda_pin == 4 && config.scl_pin == 5;
+        return
+            (config.sda_pin == 0 && config.scl_pin == 1) ||
+            (config.sda_pin == 4 && config.scl_pin == 5);
     }
 
-    return config.sda_pin == 6 && config.scl_pin == 7;
+    if (config.controller == I2cController::I2c1)
+    {
+        return config.sda_pin == 6 && config.scl_pin == 7;
+    }
+
+    return false;
 }
 
 void configure_i2c_pin(std::uint8_t pin)
 {
-    // Remove RP2350 pad isolation and output-disable state.
-    // Enable the input path required for reading the I2C bus.
+    // Pad isolation és output-disable kikapcsolása.
+    // Bemenet és belső felhúzóellenállás bekapcsolása.
     pads_bank0_hw->io[pin] &=
         ~(PADS_BANK0_GPIO0_ISO_BITS |
-          PADS_BANK0_GPIO0_OD_BITS);
+          PADS_BANK0_GPIO0_OD_BITS |
+          PADS_BANK0_GPIO0_PDE_BITS);
 
     pads_bank0_hw->io[pin] |=
-        PADS_BANK0_GPIO0_IE_BITS;
+        PADS_BANK0_GPIO0_IE_BITS |
+        PADS_BANK0_GPIO0_PUE_BITS;
 
-    // Connect the physical GPIO pin to the I2C peripheral.
     io_bank0_hw->io[pin].ctrl = GPIO_FUNC_I2C;
 }
 

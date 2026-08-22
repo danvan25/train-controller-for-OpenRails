@@ -44,8 +44,6 @@ add_executable(firmware
     src/graphics/evm_display.cpp
     src/inputs/linear_potentiometer.cpp
     src/tests/potentiometer_test.cpp
-    src/inputs/linear_potentiometer.cpp
-    src/tests/potentiometer_test.cpp
 )
 
 pico_set_program_name(firmware "firmware")
@@ -69,3 +67,30 @@ target_include_directories(firmware PRIVATE
 
 pico_add_extra_outputs(firmware)
 
+add_executable(communication_test
+    src/tests/communication_test.cpp
+)
+
+target_link_libraries(communication_test
+    pico_stdlib
+)
+
+pico_enable_stdio_uart(communication_test 0)
+pico_enable_stdio_usb(communication_test 1)
+
+pico_add_extra_outputs(communication_test)
+
+
+add_executable(i2c_diagnostic
+    src/tests/i2c_diagnostic.cpp
+)
+
+target_link_libraries(i2c_diagnostic
+    pico_stdlib
+    hardware_i2c
+)
+
+pico_enable_stdio_uart(i2c_diagnostic 0)
+pico_enable_stdio_usb(i2c_diagnostic 1)
+
+pico_add_extra_outputs(i2c_diagnostic)

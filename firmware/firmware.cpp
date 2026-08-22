@@ -28,6 +28,7 @@ constexpr std::uint32_t POTENTIOMETER_PRINT_INTERVAL_MS = 200;
 constexpr std::uint8_t THROTTLE_DEADBAND_PERCENT = 2;
 constexpr std::uint8_t TRAIN_BRAKE_DEADBAND_PERCENT = 2;
 constexpr std::uint32_t MAIN_LOOP_DELAY_MS = 5;
+constexpr std::uint8_t SECONDARY_BRAKE_DEADBAND_PERCENT = 2;
 
 bool line_equals(
     const std::array<char, 32>& line,
@@ -91,8 +92,11 @@ int main()
 
     train_controller::inputs::LinearPotentiometer throttle(26, 0);
     train_controller::inputs::LinearPotentiometer train_brake(27, 1);
+    train_controller::inputs::LinearPotentiometer secondary_brake(28, 2);
+
     throttle.initialize();
     train_brake.initialize();
+    secondary_brake.initialize();
 
     using train_controller::drivers::Sh1106;
 
@@ -111,9 +115,9 @@ int main()
 
     const I2cConfig i2c_config {
         I2cController::I2c0,
-        4,
-        5,
-        400'000,
+        0,
+        1,
+        100'000,
         150'000'000
     };
 
@@ -121,7 +125,7 @@ int main()
     I2cController::I2c1,
     6,
     7,
-    400'000,
+    100'000,
     150'000'000
 };
 
@@ -213,6 +217,7 @@ const auto render_speed =
     absolute_time_t next_potentiometer_print = get_absolute_time();
     std::optional<std::uint8_t> last_sent_throttle;
     std::optional<std::uint8_t> last_sent_train_brake;
+    std::optional<std::uint8_t> last_sent_secondary_brake;
 
     const auto run_potentiometer_test_if_due = [&]()
     {
@@ -263,6 +268,28 @@ const auto render_speed =
 
                 last_sent_train_brake = current_train_brake;
             }
+
+            const std::uint8_t current_secondary_brake =
+    secondary_brake.read_percentage();
+
+    const unsigned secondary_brake_difference =
+        last_sent_secondary_brake.has_value()
+            ? (current_secondary_brake > *last_sent_secondary_brake
+                ? current_secondary_brake - *last_sent_secondary_brake
+                : *last_sent_secondary_brake - current_secondary_brake)
+            : SECONDARY_BRAKE_DEADBAND_PERCENT;
+
+    if (!last_sent_secondary_brake.has_value() ||
+        secondary_brake_difference >
+            SECONDARY_BRAKE_DEADBAND_PERCENT)
+    {
+        std::printf(
+            "SECONDARY_BRAKE=%u\n",
+            static_cast<unsigned>(current_secondary_brake)
+        );
+
+        last_sent_secondary_brake = current_secondary_brake;
+    }
 
             next_potentiometer_print = make_timeout_time_ms(
                 POTENTIOMETER_PRINT_INTERVAL_MS
