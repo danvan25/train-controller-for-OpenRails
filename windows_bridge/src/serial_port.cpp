@@ -75,7 +75,7 @@ void SerialPort::configure_timeouts() {
     timeouts.ReadIntervalTimeout = 50;
     timeouts.ReadTotalTimeoutConstant = 50;
     timeouts.ReadTotalTimeoutMultiplier = 0;
-    timeouts.WriteTotalTimeoutConstant = 50;
+    timeouts.WriteTotalTimeoutConstant = 500;
     timeouts.WriteTotalTimeoutMultiplier = 0;
 
     if (!SetCommTimeouts(handle_, &timeouts)) {
@@ -93,39 +93,56 @@ bool SerialPort::read_character(char& character) {
     return bytes_read == 1;
 }
 
-void SerialPort::write_line(std::string_view line) {
+bool SerialPort::write_line(std::string_view line) {
     std::string data(line);
     data += '\n';
 
+    constexpr unsigned MAXIMUM_ATTEMPTS = 3;
+    last_write_error_ = ERROR_SUCCESS;
     std::size_t total_bytes_written = 0;
 
-    while (total_bytes_written < data.size()) {
-        DWORD bytes_written = 0;
+    for (unsigned attempt = 0; attempt < MAXIMUM_ATTEMPTS; ++attempt) {
+        while (total_bytes_written < data.size()) {
+            DWORD bytes_written = 0;
 
-        const BOOL succeeded = WriteFile(
-            handle_,
-            data.data() + total_bytes_written,
-            static_cast<DWORD>(
-                data.size() - total_bytes_written
-            ),
-            &bytes_written,
-            nullptr
-        );
-
-        if (!succeeded) {
-            throw windows_error(
-                "Could not write to serial port."
+            const BOOL succeeded = WriteFile(
+                handle_,
+                data.data() + total_bytes_written,
+                static_cast<DWORD>(
+                    data.size() - total_bytes_written
+                ),
+                &bytes_written,
+                nullptr
             );
+
+            if (!succeeded) {
+                last_write_error_ = GetLastError();
+                break;
+            }
+
+            if (bytes_written == 0) {
+                last_write_error_ = ERROR_SEM_TIMEOUT;
+                break;
+            }
+
+            total_bytes_written += bytes_written;
         }
 
-        if (bytes_written == 0) {
-            throw std::runtime_error(
-                "Serial port write completed without writing data."
-            );
+        if (total_bytes_written == data.size()) {
+            last_write_error_ = ERROR_SUCCESS;
+            return true;
         }
 
-        total_bytes_written += bytes_written;
+        DWORD communication_errors = 0;
+        ClearCommError(handle_, &communication_errors, nullptr);
+        Sleep(20);
     }
+
+    return false;
+}
+
+DWORD SerialPort::last_write_error() const {
+    return last_write_error_;
 }
 
 }  // namespace train_controller::bridge

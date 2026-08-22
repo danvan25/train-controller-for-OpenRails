@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <array>
 #include <cstdio>
+#include <optional>
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include "hardware/regs/pads_bank0.h"
@@ -24,8 +25,31 @@ constexpr std::uint32_t LED_MASK = 1u << LED_PIN;
 constexpr std::uint16_t MAXIMUM_SPEED = 160;
 
 constexpr std::uint32_t POTENTIOMETER_PRINT_INTERVAL_MS = 200;
-constexpr std::uint32_t EVM_SIGNAL_INTERVAL_MS = 700;
+constexpr std::uint8_t THROTTLE_DEADBAND_PERCENT = 2;
+constexpr std::uint8_t TRAIN_BRAKE_DEADBAND_PERCENT = 2;
 constexpr std::uint32_t MAIN_LOOP_DELAY_MS = 5;
+constexpr std::uint8_t SECONDARY_BRAKE_DEADBAND_PERCENT = 2;
+
+bool line_equals(
+    const std::array<char, 32>& line,
+    std::size_t length,
+    const char* expected
+)
+{
+    std::size_t index = 0;
+
+    while (expected[index] != '\0')
+    {
+        if (index >= length || line[index] != expected[index])
+        {
+            return false;
+        }
+
+        ++index;
+    }
+
+    return index == length;
+}
 
 void initialize_status_led()
 {
@@ -67,7 +91,12 @@ int main()
     stdio_init_all();
 
     train_controller::inputs::LinearPotentiometer throttle(26, 0);
+    train_controller::inputs::LinearPotentiometer train_brake(27, 1);
+    train_controller::inputs::LinearPotentiometer secondary_brake(28, 2);
+
     throttle.initialize();
+    train_brake.initialize();
+    secondary_brake.initialize();
 
     using train_controller::drivers::Sh1106;
 
@@ -86,9 +115,9 @@ int main()
 
     const I2cConfig i2c_config {
         I2cController::I2c0,
-        4,
-        5,
-        400'000,
+        0,
+        1,
+        100'000,
         150'000'000
     };
 
@@ -96,7 +125,7 @@ int main()
     I2cController::I2c1,
     6,
     7,
-    400'000,
+    100'000,
     150'000'000
 };
 
@@ -144,28 +173,15 @@ const SpeedGauge speed_gauge(gauge_config);
 
 const train_controller::graphics::EvmDisplay evm_display;
 
-constexpr std::array<
-    train_controller::graphics::EvmSignal,
-    8
-> EVM_SIGNALS {
-    train_controller::graphics::EvmSignal::MaximumSpeed,
-    train_controller::graphics::EvmSignal::Speed120,
-    train_controller::graphics::EvmSignal::Speed80,
-    train_controller::graphics::EvmSignal::Speed40,
-    train_controller::graphics::EvmSignal::PrepareToStop,
-    train_controller::graphics::EvmSignal::PassedStopSignal,
-    train_controller::graphics::EvmSignal::NoSignal,
-    train_controller::graphics::EvmSignal::Shunting
-};
-
-std::size_t evm_signal_index = 0;
+EvmSignal displayed_evm_signal = EvmSignal::NoSignal;
+bool evm_display_dirty = true;
 
 const auto render_evm_signal =
     [&]() -> I2cResult
     {
         evm_display.draw(
             evm_framebuffer,
-            EVM_SIGNALS[evm_signal_index]
+            displayed_evm_signal
         );
 
         return second_display.present(
@@ -199,8 +215,9 @@ const auto render_speed =
     set_status_led(true);
 
     absolute_time_t next_potentiometer_print = get_absolute_time();
-    absolute_time_t next_evm_signal =
-        make_timeout_time_ms(EVM_SIGNAL_INTERVAL_MS);
+    std::optional<std::uint8_t> last_sent_throttle;
+    std::optional<std::uint8_t> last_sent_train_brake;
+    std::optional<std::uint8_t> last_sent_secondary_brake;
 
     const auto run_potentiometer_test_if_due = [&]()
     {
@@ -209,7 +226,70 @@ const auto render_speed =
                 next_potentiometer_print
             ) <= 0)
         {
-            train_controller::tests::print_potentiometer("THROTTLE",throttle);
+            const std::uint8_t current_throttle =
+                throttle.read_percentage();
+
+            const unsigned difference =
+                last_sent_throttle.has_value()
+                    ? (current_throttle > *last_sent_throttle
+                        ? current_throttle - *last_sent_throttle
+                        : *last_sent_throttle - current_throttle)
+                    : THROTTLE_DEADBAND_PERCENT;
+
+            if (!last_sent_throttle.has_value() ||
+                difference > THROTTLE_DEADBAND_PERCENT)
+            {
+                std::printf(
+                    "THROTTLE=%u\n",
+                    static_cast<unsigned>(current_throttle)
+                );
+
+                last_sent_throttle = current_throttle;
+            }
+
+            const std::uint8_t current_train_brake =
+                train_brake.read_percentage();
+
+            const unsigned train_brake_difference =
+                last_sent_train_brake.has_value()
+                    ? (current_train_brake > *last_sent_train_brake
+                        ? current_train_brake - *last_sent_train_brake
+                        : *last_sent_train_brake - current_train_brake)
+                    : TRAIN_BRAKE_DEADBAND_PERCENT;
+
+            if (!last_sent_train_brake.has_value() ||
+                train_brake_difference >
+                    TRAIN_BRAKE_DEADBAND_PERCENT)
+            {
+                std::printf(
+                    "TRAIN_BRAKE=%u\n",
+                    static_cast<unsigned>(current_train_brake)
+                );
+
+                last_sent_train_brake = current_train_brake;
+            }
+
+            const std::uint8_t current_secondary_brake =
+    secondary_brake.read_percentage();
+
+    const unsigned secondary_brake_difference =
+        last_sent_secondary_brake.has_value()
+            ? (current_secondary_brake > *last_sent_secondary_brake
+                ? current_secondary_brake - *last_sent_secondary_brake
+                : *last_sent_secondary_brake - current_secondary_brake)
+            : SECONDARY_BRAKE_DEADBAND_PERCENT;
+
+    if (!last_sent_secondary_brake.has_value() ||
+        secondary_brake_difference >
+            SECONDARY_BRAKE_DEADBAND_PERCENT)
+    {
+        std::printf(
+            "SECONDARY_BRAKE=%u\n",
+            static_cast<unsigned>(current_secondary_brake)
+        );
+
+        last_sent_secondary_brake = current_secondary_brake;
+    }
 
             next_potentiometer_print = make_timeout_time_ms(
                 POTENTIOMETER_PRINT_INTERVAL_MS
@@ -307,27 +387,64 @@ const auto render_speed =
                 );
             }
 
+            EvmSignal received_evm_signal = EvmSignal::NoSignal;
+            bool valid_evm_message = true;
+
+            if (line_equals(serial_line, serial_line_length,
+                            "EVM=MAXIMUM_SPEED"))
+            {
+                received_evm_signal = EvmSignal::MaximumSpeed;
+            }
+            else if (line_equals(serial_line, serial_line_length,
+                                 "EVM=SPEED_120"))
+            {
+                received_evm_signal = EvmSignal::Speed120;
+            }
+            else if (line_equals(serial_line, serial_line_length,
+                                 "EVM=SPEED_80"))
+            {
+                received_evm_signal = EvmSignal::Speed80;
+            }
+            else if (line_equals(serial_line, serial_line_length,
+                                 "EVM=SPEED_40"))
+            {
+                received_evm_signal = EvmSignal::Speed40;
+            }
+            else if (line_equals(serial_line, serial_line_length,
+                                 "EVM=PREPARE_TO_STOP"))
+            {
+                received_evm_signal = EvmSignal::PrepareToStop;
+            }
+            else if (line_equals(serial_line, serial_line_length,
+                                 "EVM=PASSED_STOP_SIGNAL"))
+            {
+                received_evm_signal = EvmSignal::PassedStopSignal;
+            }
+            else if (line_equals(serial_line, serial_line_length,
+                                 "EVM=NO_SIGNAL"))
+            {
+                received_evm_signal = EvmSignal::NoSignal;
+            }
+            else if (line_equals(serial_line, serial_line_length,
+                                 "EVM=SHUNTING"))
+            {
+                received_evm_signal = EvmSignal::Shunting;
+            }
+            else
+            {
+                valid_evm_message = false;
+            }
+
+            if (valid_evm_message &&
+                received_evm_signal != displayed_evm_signal)
+            {
+                displayed_evm_signal = received_evm_signal;
+                evm_display_dirty = true;
+                std::printf("RECEIVED_EVM=OK\n");
+            }
+
             serial_line_length = 0;
         }
-    };
-
-    const auto update_evm_if_due = [&]() -> I2cResult
-    {
-        if (absolute_time_diff_us(
-                get_absolute_time(),
-                next_evm_signal
-            ) > 0)
-        {
-            return I2cResult::Ok;
-        }
-
-        evm_signal_index =
-            (evm_signal_index + 1) % EVM_SIGNALS.size();
-
-        next_evm_signal =
-            make_timeout_time_ms(EVM_SIGNAL_INTERVAL_MS);
-
-        return render_evm_signal();
     };
 
     while (true)
@@ -345,9 +462,14 @@ const auto render_speed =
             speed_display_dirty = false;
         }
 
-        if (update_evm_if_due() != I2cResult::Ok)
+        if (evm_display_dirty)
         {
-            blink_error(600);
+            if (render_evm_signal() != I2cResult::Ok)
+            {
+                blink_error(600);
+            }
+
+            evm_display_dirty = false;
         }
 
         sleep_ms(MAIN_LOOP_DELAY_MS);

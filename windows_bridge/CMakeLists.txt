@@ -12,6 +12,7 @@ add_executable(openrails_bridge
     src/message_parser.cpp
     src/openrails_client.cpp
     src/evm_mapper.cpp
+    src/control_profile.cpp
 )
 
 target_include_directories(openrails_bridge
