@@ -256,22 +256,74 @@ void OpenRailsClient::set_dynamic_brake(unsigned percentage) {
     set_control("DYNAMIC_BRAKE", percentage);
 }
 
+void OpenRailsClient::set_horn(bool enabled) {
+    set_control_fraction("HORN", enabled ? 1.0 : 0.0);
+}
+
+void OpenRailsClient::set_sanders(bool enabled) {
+    set_control_fraction("SANDERS", enabled ? 1.0 : 0.0);
+}
+
+void OpenRailsClient::set_wipers(bool enabled) {
+    set_control_fraction("WIPERS", enabled ? 1.0 : 0.0);
+}
+
+void OpenRailsClient::set_headlight(unsigned position) {
+    if (position > 2) {
+        throw std::invalid_argument("Invalid headlight position.");
+    }
+
+    set_control_fraction(
+        "FRONT_HLIGHT",
+        static_cast<double>(position)
+    );
+}
+
+void OpenRailsClient::set_direction(unsigned position) {
+    if (position > 2) throw std::invalid_argument("Invalid direction position.");
+
+    // Firmware: 0=neutral, 1=forward, 2=reverse.
+    // Open Rails Cab Controls page expects -1=reverse, 0=neutral, +1=forward.
+    const double value = position == 0 ? 0.0 : (position == 1 ? 1.0 : -1.0);
+    set_control_fraction("DIRECTION", value);
+}
+
 void OpenRailsClient::set_control(
     const char* type_name,
     unsigned percentage
 ) {
-    const double normalized_value =
-        static_cast<double>(percentage) / 100.0;
+    set_control_fraction(
+        type_name,
+        static_cast<double>(percentage) / 100.0
+    );
+}
+
+void OpenRailsClient::set_control_fraction(
+    const char* type_name,
+    double normalized_value
+) {
 
     std::ostringstream json_stream;
+
     json_stream
-        << std::fixed
-        << std::setprecision(2)
         << R"([{"TypeName":")"
         << type_name
-        << R"(","Value":)"
-        << normalized_value
-        << R"(}])";
+        << R"(","Value":)";
+
+    if (std::string(type_name) == "FRONT_HLIGHT") {
+        json_stream
+            << '"'
+            << static_cast<unsigned>(normalized_value)
+            << '"';
+    }
+    else {
+        json_stream
+            << std::fixed
+            << std::setprecision(2)
+            << normalized_value;
+    }
+
+    json_stream << R"(}])";
 
     const std::string request_body = json_stream.str();
 

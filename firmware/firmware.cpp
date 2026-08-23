@@ -21,14 +21,115 @@ namespace
 
 constexpr std::uint32_t LED_PIN = 25;
 constexpr std::uint32_t LED_MASK = 1u << LED_PIN;
-
 constexpr std::uint16_t MAXIMUM_SPEED = 160;
-
 constexpr std::uint32_t POTENTIOMETER_PRINT_INTERVAL_MS = 200;
 constexpr std::uint8_t THROTTLE_DEADBAND_PERCENT = 2;
 constexpr std::uint8_t TRAIN_BRAKE_DEADBAND_PERCENT = 2;
 constexpr std::uint32_t MAIN_LOOP_DELAY_MS = 5;
 constexpr std::uint8_t SECONDARY_BRAKE_DEADBAND_PERCENT = 2;
+constexpr std::uint32_t DIGITAL_INPUT_DEBOUNCE_MS = 30;
+
+constexpr std::uint32_t VIGILANCE_BUTTON_PIN = 2;
+constexpr std::uint32_t SAND_BUTTON_PIN = 3;
+constexpr std::uint32_t HORN_BUTTON_PIN = 4;
+constexpr std::uint32_t EMERGENCY_BRAKE_BUTTON_PIN = 5;
+constexpr std::uint32_t WIPER_SWITCH_PIN = 8;
+constexpr std::uint32_t CAB_LIGHT_SWITCH_PIN = 9;
+constexpr std::uint32_t PANTOGRAPH_1_SWITCH_PIN = 10;
+constexpr std::uint32_t PANTOGRAPH_2_SWITCH_PIN = 11;
+constexpr std::uint32_t HEADLIGHT_POSITION_1_PIN = 12;
+constexpr std::uint32_t HEADLIGHT_POSITION_2_PIN = 13;
+constexpr std::uint32_t DIRECTION_FORWARD_PIN = 14;
+constexpr std::uint32_t DIRECTION_REVERSE_PIN = 15;
+
+class DebouncedActiveLowInput
+{
+public:
+    explicit DebouncedActiveLowInput(std::uint32_t pin)
+        : pin_(pin)
+    {
+    }
+
+    void initialize()
+    {
+        gpio_init(pin_);
+        gpio_set_dir(pin_, GPIO_IN);
+        gpio_pull_up(pin_);
+
+        raw_state_ = read_active_state();
+        stable_state_ = raw_state_;
+        last_raw_change_ = get_absolute_time();
+    }
+
+    bool update()
+    {
+        const bool current_raw_state = read_active_state();
+
+        if (current_raw_state != raw_state_)
+        {
+            raw_state_ = current_raw_state;
+            last_raw_change_ = get_absolute_time();
+        }
+
+        const std::int64_t stable_time_us =
+            absolute_time_diff_us(
+                last_raw_change_,
+                get_absolute_time()
+            );
+
+        if (raw_state_ != stable_state_ &&
+            stable_time_us >=
+                static_cast<std::int64_t>(
+                    DIGITAL_INPUT_DEBOUNCE_MS
+                ) * 1000)
+        {
+            stable_state_ = raw_state_;
+            return true;
+        }
+
+        return false;
+    }
+
+    [[nodiscard]] bool active() const
+    {
+        return stable_state_;
+    }
+
+private:
+    [[nodiscard]] bool read_active_state() const
+    {
+        return !gpio_get(pin_);
+    }
+
+    std::uint32_t pin_;
+    bool raw_state_ = false;
+    bool stable_state_ = false;
+    absolute_time_t last_raw_change_ {};
+};
+
+int three_position_value(
+    const DebouncedActiveLowInput& position_1,
+    const DebouncedActiveLowInput& position_2
+)
+{
+    if (position_1.active() && position_2.active())
+    {
+        return -1;
+    }
+
+    if (position_1.active())
+    {
+        return 1;
+    }
+
+    if (position_2.active())
+    {
+        return 2;
+    }
+
+    return 0;
+}
+
 
 bool line_equals(
     const std::array<char, 32>& line,
@@ -84,6 +185,8 @@ void set_status_led(bool enabled)
     }
 }
 
+
+
 }
 
 int main()
@@ -93,6 +196,33 @@ int main()
     train_controller::inputs::LinearPotentiometer throttle(26, 0);
     train_controller::inputs::LinearPotentiometer train_brake(27, 1);
     train_controller::inputs::LinearPotentiometer secondary_brake(28, 2);
+
+    DebouncedActiveLowInput vigilance_button(VIGILANCE_BUTTON_PIN);
+    DebouncedActiveLowInput sand_button(SAND_BUTTON_PIN);
+    DebouncedActiveLowInput horn_button(HORN_BUTTON_PIN);
+    DebouncedActiveLowInput emergency_brake_button(
+        EMERGENCY_BRAKE_BUTTON_PIN
+    );
+    DebouncedActiveLowInput wiper_switch(WIPER_SWITCH_PIN);
+    DebouncedActiveLowInput cab_light_switch(CAB_LIGHT_SWITCH_PIN);
+    DebouncedActiveLowInput pantograph_1_switch(
+        PANTOGRAPH_1_SWITCH_PIN
+    );
+    DebouncedActiveLowInput pantograph_2_switch(
+        PANTOGRAPH_2_SWITCH_PIN
+    );
+    DebouncedActiveLowInput headlight_position_1(
+        HEADLIGHT_POSITION_1_PIN
+    );
+    DebouncedActiveLowInput headlight_position_2(
+        HEADLIGHT_POSITION_2_PIN
+    );
+    DebouncedActiveLowInput direction_forward(
+        DIRECTION_FORWARD_PIN
+    );
+    DebouncedActiveLowInput direction_reverse(
+        DIRECTION_REVERSE_PIN
+    );
 
     throttle.initialize();
     train_brake.initialize();
@@ -112,6 +242,19 @@ int main()
     using train_controller::hal::I2cResult;
 
     initialize_status_led();
+
+    vigilance_button.initialize();
+    sand_button.initialize();
+    horn_button.initialize();
+    emergency_brake_button.initialize();
+    wiper_switch.initialize();
+    cab_light_switch.initialize();
+    pantograph_1_switch.initialize();
+    pantograph_2_switch.initialize();
+    headlight_position_1.initialize();
+    headlight_position_2.initialize();
+    direction_forward.initialize();
+    direction_reverse.initialize();
 
     const I2cConfig i2c_config {
         I2cController::I2c0,
@@ -218,6 +361,115 @@ const auto render_speed =
     std::optional<std::uint8_t> last_sent_throttle;
     std::optional<std::uint8_t> last_sent_train_brake;
     std::optional<std::uint8_t> last_sent_secondary_brake;
+
+    bool vigilance_state_sent = false;
+    bool sand_state_sent = false;
+    bool horn_state_sent = false;
+    bool emergency_brake_state_sent = false;
+    bool wiper_state_sent = false;
+    bool cab_light_state_sent = false;
+    bool pantograph_1_state_sent = false;
+    bool pantograph_2_state_sent = false;
+    std::optional<int> last_sent_headlight;
+    std::optional<int> last_sent_direction;
+
+    const auto process_digital_inputs = [&]()
+    {
+        const auto process_binary_input = [](
+            DebouncedActiveLowInput& input,
+            const char* message_name,
+            bool& state_sent
+        )
+        {
+            const bool state_changed = input.update();
+
+            if (state_changed || !state_sent)
+            {
+                std::printf(
+                    "%s=%u\n",
+                    message_name,
+                    input.active() ? 1u : 0u
+                );
+
+                state_sent = true;
+            }
+        };
+
+        process_binary_input(
+            vigilance_button,
+            "VIGILANCE",
+            vigilance_state_sent
+        );
+        process_binary_input(
+            sand_button,
+            "SAND",
+            sand_state_sent
+        );
+        process_binary_input(
+            horn_button,
+            "HORN",
+            horn_state_sent
+        );
+        process_binary_input(
+            emergency_brake_button,
+            "EMERGENCY_BRAKE",
+            emergency_brake_state_sent
+        );
+        process_binary_input(
+            wiper_switch,
+            "WIPER",
+            wiper_state_sent
+        );
+        process_binary_input(
+            cab_light_switch,
+            "CAB_LIGHT",
+            cab_light_state_sent
+        );
+        process_binary_input(
+            pantograph_1_switch,
+            "PANTOGRAPH_1",
+            pantograph_1_state_sent
+        );
+        process_binary_input(
+            pantograph_2_switch,
+            "PANTOGRAPH_2",
+            pantograph_2_state_sent
+        );
+
+        const bool headlight_input_changed =
+            headlight_position_1.update() |
+            headlight_position_2.update();
+
+        const int headlight_value = three_position_value(
+            headlight_position_1,
+            headlight_position_2
+        );
+
+        if (headlight_input_changed ||
+            !last_sent_headlight.has_value() ||
+            headlight_value != *last_sent_headlight)
+        {
+            std::printf("HEADLIGHT=%d\n", headlight_value);
+            last_sent_headlight = headlight_value;
+        }
+
+        const bool direction_input_changed =
+            direction_forward.update() |
+            direction_reverse.update();
+
+        const int direction_value = three_position_value(
+            direction_forward,
+            direction_reverse
+        );
+
+        if (direction_input_changed ||
+            !last_sent_direction.has_value() ||
+            direction_value != *last_sent_direction)
+        {
+            std::printf("DIRECTION=%d\n", direction_value);
+            last_sent_direction = direction_value;
+        }
+    };
 
     const auto run_potentiometer_test_if_due = [&]()
     {
@@ -451,6 +703,7 @@ const auto render_speed =
     {
         process_serial_input();
         run_potentiometer_test_if_due();
+        process_digital_inputs();
 
         if (speed_display_dirty)
         {
