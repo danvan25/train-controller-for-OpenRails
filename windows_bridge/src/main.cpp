@@ -3,6 +3,7 @@
 #include "message_parser.hpp"
 #include "openrails_client.hpp"
 #include "serial_port.hpp"
+#include "switch_panel_client.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -16,6 +17,8 @@ int main(int argc, char* argv[])
     constexpr int THROTTLE_PICKUP_TOLERANCE = 2;
     constexpr int TRAIN_BRAKE_PICKUP_TOLERANCE = 2;
     constexpr int SECONDARY_BRAKE_PICKUP_TOLERANCE = 2;
+    constexpr int HEADLIGHT_INCREASE_COMMAND = 173;
+    constexpr int HEADLIGHT_DECREASE_COMMAND = 174;
 
     if (argc < 2 || argc > 3)
     {
@@ -46,6 +49,7 @@ int main(int argc, char* argv[])
     {
         train_controller::bridge::SerialPort serial_port(argv[1]);
         train_controller::bridge::OpenRailsClient open_rails;
+        train_controller::bridge::SwitchPanelClient switch_panel;
 
         std::cout
             << "Connected to " << argv[1] << '\n'
@@ -87,6 +91,13 @@ int main(int argc, char* argv[])
         bool train_brake_control_missing_reported = false;
         bool secondary_brake_pickup_active = false;
         bool secondary_brake_control_missing_reported = false;
+        std::optional<bool> desired_pantograph_1;
+        std::optional<bool> desired_pantograph_2;
+        bool cab_light_unsupported_reported = false;
+        auto last_pantograph_1_command =
+            std::chrono::steady_clock::time_point {};
+        auto last_pantograph_2_command =
+            std::chrono::steady_clock::time_point {};
 
         auto last_speed_request =
             std::chrono::steady_clock::now();
@@ -186,6 +197,40 @@ int main(int argc, char* argv[])
         {
             const auto now =
                 std::chrono::steady_clock::now();
+
+            const auto synchronize_pantograph =
+                [&](int user_command,
+                    const std::optional<bool>& desired,
+                    const std::optional<bool>& actual,
+                    std::chrono::steady_clock::time_point& last_command)
+                {
+                    if (!desired.has_value() || !actual.has_value() ||
+                        *desired == *actual ||
+                        now - last_command < std::chrono::milliseconds(750))
+                    {
+                        return;
+                    }
+
+                    switch_panel.pulse_button(user_command);
+                    last_command = now;
+                    std::cout
+                        << "Pantograph "
+                        << (user_command == 153 ? 1 : 2)
+                        << " synchronization command sent.\n";
+                };
+
+            synchronize_pantograph(
+                153,
+                desired_pantograph_1,
+                switch_panel.pantograph_1_up(),
+                last_pantograph_1_command
+            );
+            synchronize_pantograph(
+                154,
+                desired_pantograph_2,
+                switch_panel.pantograph_2_up(),
+                last_pantograph_2_command
+            );
 
             if (now - last_speed_request >= speed_request_interval)
             {
@@ -662,6 +707,24 @@ int main(int argc, char* argv[])
                 continue;
             }
 
+            const auto execute_control =
+                [&](const char* name, const auto& action)
+                {
+                    try
+                    {
+                        action();
+                        std::cout
+                            << name << '=' << message->value
+                            << " -> Open Rails\n";
+                    }
+                    catch (const std::exception& error)
+                    {
+                        std::cerr
+                            << name << " command error: "
+                            << error.what() << '\n';
+                    }
+                };
+
             if (message->key == "THROTTLE")
             {
                 if (message->value < 0 || message->value > 100)
@@ -975,7 +1038,137 @@ int main(int argc, char* argv[])
                 }
             }
 
-            // RECEIVED_SPEED and future valid messages are intentionally
+            if (message->key == "HORN" ||
+                message->key == "SAND" ||
+                message->key == "WIPER")
+            {
+                if (message->value < 0 || message->value > 1)
+                {
+                    std::cerr << "Invalid " << message->key
+                              << " value: " << message->value << '\n';
+                }
+                else
+                {
+                    const bool enabled = message->value == 1;
+                    execute_control(message->key.c_str(), [&]()
+                    {
+                        if (message->key == "HORN") open_rails.set_horn(enabled);
+                        else if (message->key == "SAND") open_rails.set_sanders(enabled);
+                        else open_rails.set_wipers(enabled);
+                    });
+                }
+            }
+
+            if (message->key == "VIGILANCE" ||
+                message->key == "EMERGENCY_BRAKE")
+            {
+                if (message->value < 0 || message->value > 1)
+                {
+                    std::cerr << "Invalid " << message->key
+                              << " value: " << message->value << '\n';
+                }
+                else
+                {
+                    const int command =
+                        message->key == "VIGILANCE" ? 140 : 141;
+                    execute_control(message->key.c_str(), [&]()
+                    {
+                        switch_panel.set_button(
+                            command,
+                            message->value == 1
+                        );
+                    });
+                }
+            }
+
+            if (message->key == "HEADLIGHT" ||
+                message->key == "DIRECTION")
+            {
+                if (message->value < 0 || message->value > 2)
+                {
+                    std::cerr << "Invalid " << message->key
+                              << " value: " << message->value << '\n';
+                }
+                else
+                {
+                    execute_control(message->key.c_str(), [&]()
+                    {
+                        if (message->key == "HEADLIGHT")
+                        {
+                            const auto increase_headlight = [&]()
+                            {
+                                switch_panel.pulse_button(
+                                    HEADLIGHT_INCREASE_COMMAND
+                                );
+                            };
+
+                            const auto decrease_headlight = [&]()
+                            {
+                                switch_panel.pulse_button(
+                                    HEADLIGHT_DECREASE_COMMAND
+                                );
+                            };
+
+                            if (message->value == 0)
+                            {
+                                // Two decreases guarantee the off state,
+                                // regardless of the current OR state.
+                                decrease_headlight();
+                                decrease_headlight();
+                            }
+                            else if (message->value == 1)
+                            {
+                                // First go to off, then advance once to dim.
+                                decrease_headlight();
+                                decrease_headlight();
+                                increase_headlight();
+                            }
+                            else
+                            {
+                                // Two increases guarantee full beam,
+                                // regardless of the current OR state.
+                                increase_headlight();
+                                increase_headlight();
+                            }
+                        }
+                        else
+                        {
+                            open_rails.set_direction(
+                                static_cast<unsigned>(message->value)
+                            );
+                        }
+                    });
+                }
+            }
+
+            if (message->key == "PANTOGRAPH_1" ||
+                message->key == "PANTOGRAPH_2")
+            {
+                if (message->value < 0 || message->value > 1)
+                {
+                    std::cerr << "Invalid " << message->key
+                              << " value: " << message->value << '\n';
+                }
+                else if (message->key == "PANTOGRAPH_1")
+                {
+                    desired_pantograph_1 = message->value == 1;
+                }
+                else
+                {
+                    desired_pantograph_2 = message->value == 1;
+                }
+            }
+
+            if (message->key == "CAB_LIGHT" &&
+                !cab_light_unsupported_reported)
+            {
+                std::cout
+                    << "CAB_LIGHT received, but this locomotive exposes "
+                    << "no verified Open Rails command for it.\n";
+                cab_light_unsupported_reported = true;
+            }
+
+            // RECEIVED_SPEED messages are intentionally ignored here.
             // ignored here unless they require bridge-side handling.
             line.clear();
         }

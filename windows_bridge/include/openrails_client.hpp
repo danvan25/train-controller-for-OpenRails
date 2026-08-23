@@ -51,12 +51,18 @@ public:
     void set_train_brake(unsigned percentage);
     void set_engine_brake(unsigned percentage);
     void set_dynamic_brake(unsigned percentage);
+    void set_horn(bool enabled);
+    void set_sanders(bool enabled);
+    void set_wipers(bool enabled);
+    void set_headlight(unsigned position);
+    void set_direction(unsigned position);
     CabControlState get_cab_controls();
     double get_speed_kmh();
     std::optional<NextSignalInfo> get_next_signal();
 
 private:
     void set_control(const char* type_name, unsigned percentage);
+    void set_control_fraction(const char* type_name, double fraction);
     std::string get(const wchar_t* path);
 
     HINTERNET session_ = nullptr;

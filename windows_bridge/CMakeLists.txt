@@ -13,6 +13,7 @@ add_executable(openrails_bridge
     src/openrails_client.cpp
     src/evm_mapper.cpp
     src/control_profile.cpp
+    src/switch_panel_client.cpp
 )
 
 target_include_directories(openrails_bridge
@@ -23,4 +24,9 @@ target_include_directories(openrails_bridge
 target_link_libraries(openrails_bridge
     PRIVATE
         winhttp
+)
+
+target_compile_definitions(openrails_bridge
+    PRIVATE
+        _WIN32_WINNT=0x0602
 )
